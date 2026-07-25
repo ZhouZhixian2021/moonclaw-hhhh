@@ -1,6 +1,6 @@
 """命令行入口。
 
-这个模块负责把“用户怎么启动 pico”翻译成 runtime 能理解的对象：
+这个模块负责把用户怎么启动 moonClaw翻译成 runtime 能理解的对象：
 解析参数、挑模型后端、构建工作区快照、恢复或新建 session，
 最后进入 one-shot 或交互式循环。
 """
@@ -13,19 +13,19 @@ import textwrap
 
 from .config import load_project_env, provider_env
 from .models import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
-from .runtime import Pico, SessionStore
+from .runtime import MoonClaw, SessionStore
 from .workspace import WorkspaceContext, middle
 
 DEFAULT_SECRET_ENV_NAMES = (
-    "PICO_OPENAI_API_KEY",
+    "MOONCLAW_OPENAI_API_KEY",
     "OPENAI_API_KEY",
     "OPENAI_API_TOKEN",
-    "PICO_ANTHROPIC_API_KEY",
+    "MOONCLAW_ANTHROPIC_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
-    "PICO_DEEPSEEK_API_KEY",
+    "MOONCLAW_DEEPSEEK_API_KEY",
     "DEEPSEEK_API_KEY",
-    "PICO_RIGHT_CODES_API_KEY",
+    "MOONCLAW_RIGHT_CODES_API_KEY",
     "RIGHT_CODES_API_KEY",
     "GITHUB_PAT",
     "GH_PAT",
@@ -37,10 +37,10 @@ WELCOME_ART = (
     "       /   ^   \\\\",
     "      /|       |\\\\",
 )
-WELCOME_NAME = "pico"
+WELCOME_NAME = "moonClaw"
 WELCOME_SUBTITLE = "local coding agent"
 WELCOME_STATUS = "calm shell, ready for work"
-HELP_DETAILS = textwrap.dedent(
+HELP_DETAILS = textwrap.dedent( # 定义/help 文本
     """\
     Commands:
     /help    Show this help message.
@@ -61,7 +61,7 @@ DEFAULT_ANTHROPIC_BASE_URL = "https://www.right.codes/claude/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
 LEGACY_SECRET_ENV_NAMES_VAR = "MINI_CODING_AGENT_SECRET_ENV_NAMES"
-SECRET_ENV_NAMES_VAR = "PICO_SECRET_ENV_NAMES"
+SECRET_ENV_NAMES_VAR = "MOONCLAW_SECRET_ENV_NAMES"
 
 
 def _effective_model(args, provider):
@@ -70,20 +70,20 @@ def _effective_model(args, provider):
     # 2. provider 对应的环境变量
     # 3. 代码里的默认值
     explicit_model = getattr(args, "model", None)
-    if explicit_model:
+    if explicit_model: #若用户显式给了模型名
         return explicit_model
     if provider == "openai":
-        model = provider_env("PICO_OPENAI_MODEL", ("OPENAI_MODEL",))
+        model = provider_env("MOONCLAW_OPENAI_MODEL", ("OPENAI_MODEL",))
         if model:
             return model
         return DEFAULT_OPENAI_MODEL
     if provider == "anthropic":
-        model = provider_env("PICO_ANTHROPIC_MODEL", ("ANTHROPIC_MODEL",))
+        model = provider_env("MOONCLAW_ANTHROPIC_MODEL", ("ANTHROPIC_MODEL",))
         if model:
             return model
         return DEFAULT_ANTHROPIC_MODEL
     if provider == "deepseek":
-        model = provider_env("PICO_DEEPSEEK_MODEL", ("DEEPSEEK_MODEL",))
+        model = provider_env("MOONCLAW_DEEPSEEK_MODEL", ("DEEPSEEK_MODEL",))
         if model:
             return model
         return DEFAULT_DEEPSEEK_MODEL
@@ -105,14 +105,14 @@ def _configured_secret_names(args):
     return sorted(configured_secret_names)
 
 
-def _build_model_client(args):
+def _build_model_client(args): #按 provider 构造模型客户端实例
     provider = getattr(args, "provider", "openai")
     # CLI 只负责把 provider 选择翻译成具体 client。
     # 真正的提示词格式、缓存支持、HTTP 协议差异，都封装在 models.py 里。
     if provider == "openai":
         model = _effective_model(args, provider)
-        base_url = getattr(args, "base_url", None) or provider_env("PICO_OPENAI_API_BASE", ("OPENAI_API_BASE",), DEFAULT_OPENAI_BASE_URL)
-        api_key = provider_env("PICO_OPENAI_API_KEY", ("OPENAI_API_KEY",))
+        base_url = getattr(args, "base_url", None) or provider_env("MOONCLAW_OPENAI_API_BASE", ("OPENAI_API_BASE",), DEFAULT_OPENAI_BASE_URL)
+        api_key = provider_env("MOONCLAW_OPENAI_API_KEY", ("OPENAI_API_KEY",))
         return OpenAICompatibleModelClient(
             model=model,
             base_url=base_url,
@@ -122,10 +122,10 @@ def _build_model_client(args):
         )
     if provider == "anthropic":
         model = _effective_model(args, provider)
-        base_url = getattr(args, "base_url", None) or provider_env("PICO_ANTHROPIC_API_BASE", ("ANTHROPIC_API_BASE",), DEFAULT_ANTHROPIC_BASE_URL)
+        base_url = getattr(args, "base_url", None) or provider_env("MOONCLAW_ANTHROPIC_API_BASE", ("ANTHROPIC_API_BASE",), DEFAULT_ANTHROPIC_BASE_URL)
         api_key = provider_env(
-            "PICO_ANTHROPIC_API_KEY",
-            ("ANTHROPIC_API_KEY", "PICO_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY", "PICO_OPENAI_API_KEY", "OPENAI_API_KEY"),
+            "MOONCLAW_ANTHROPIC_API_KEY",
+            ("ANTHROPIC_API_KEY", "MOONCLAW_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY", "MOONCLAW_OPENAI_API_KEY", "OPENAI_API_KEY"),
         )
         return AnthropicCompatibleModelClient(
             model=model,
@@ -136,8 +136,8 @@ def _build_model_client(args):
         )
     if provider == "deepseek":
         model = _effective_model(args, provider)
-        base_url = getattr(args, "base_url", None) or provider_env("PICO_DEEPSEEK_API_BASE", ("DEEPSEEK_API_BASE",), DEFAULT_DEEPSEEK_BASE_URL)
-        api_key = provider_env("PICO_DEEPSEEK_API_KEY", ("DEEPSEEK_API_KEY",))
+        base_url = getattr(args, "base_url", None) or provider_env("MOONCLAW_DEEPSEEK_API_BASE", ("DEEPSEEK_API_BASE",), DEFAULT_DEEPSEEK_BASE_URL)
+        api_key = provider_env("MOONCLAW_DEEPSEEK_API_KEY", ("DEEPSEEK_API_KEY",))
         return AnthropicCompatibleModelClient(
             model=model,
             base_url=base_url,
@@ -203,16 +203,16 @@ def build_welcome(agent, model, host):
 
 
 def build_agent(args):
-    """根据 CLI 参数装配出一个可运行的 Pico 实例。
+    """根据 CLI 参数装配出一个可运行的 MoonClaw 实例。
 
     为什么存在：
-    命令行参数只是字符串和开关，runtime 需要的是已经装配好的对象图：
+    命令行参数只是字符串和开关, runtime 需要的是已经装配好的对象图：
     model client、workspace snapshot、session store、secret 配置等。
-    这个函数负责把“启动参数”翻译成“agent 运行现场”。
+    这个函数负责把"启动参数"翻译成"agent 运行现场"。
 
     输入 / 输出：
     - 输入：`argparse` 解析后的 `args`
-    - 输出：一个新的 `Pico`，或一个从旧 session 恢复出来的 `Pico`
+    - 输出：一个新的 `MoonClaw`，或一个从旧 session 恢复出来的 `MoonClaw`
 
     在 agent 链路里的位置：
     它是整个程序启动链路里最靠近 runtime 的装配点。`main()` 先调它，
@@ -221,15 +221,15 @@ def build_agent(args):
     # 这里是 CLI 到 runtime 的装配点：
     # 先采集工作区快照和加载项目级环境，再整理 secret 名单、模型后端和 session。
     workspace = WorkspaceContext.build(args.cwd)
-    load_project_env(workspace.repo_root)
-    configured_secret_names = _configured_secret_names(args)
-    store = SessionStore(workspace.repo_root + "/.pico/sessions")
-    model = _build_model_client(args)
-    session_id = args.resume
-    if session_id == "latest":
+    load_project_env(workspace.repo_root) # 加载项目.env
+    configured_secret_names = _configured_secret_names(args) # 整理 secret 名单
+    store = SessionStore(workspace.repo_root + "/.moonclaw/sessions") # 会话存储器
+    model = _build_model_client(args) # 按 provider 构造模型客户端实例
+    session_id = args.resume # 恢复会话ID
+    if session_id == "latest": # 自动加载最近一次的会话
         session_id = store.latest()
-    if session_id:
-        return Pico.from_session(
+    if session_id: # 从历史记录恢复一个 AI 实例
+        return MoonClaw.from_session(
             model_client=model,
             workspace=workspace,
             session_store=store,
@@ -239,7 +239,7 @@ def build_agent(args):
             max_new_tokens=args.max_new_tokens,
             secret_env_names=configured_secret_names,
         )
-    return Pico(
+    return MoonClaw( # 新建一个 AI 实例
         model_client=model,
         workspace=workspace,
         session_store=store,
@@ -261,7 +261,7 @@ def build_arg_parser():
     parser.add_argument(
         "--model",
         default=None,
-        help="Model name override. Defaults to qwen3.5:4b for Ollama, PICO_OPENAI_MODEL for openai, PICO_ANTHROPIC_MODEL for anthropic, and PICO_DEEPSEEK_MODEL for deepseek when set.",
+        help="Model name override. Defaults to qwen3.5:4b for Ollama, MOONCLAW_OPENAI_MODEL for openai, MOONCLAW_ANTHROPIC_MODEL for anthropic, and MOONCLAW_DEEPSEEK_MODEL for deepseek when set.",
     )
     parser.add_argument("--host", default=DEFAULT_OLLAMA_HOST, help="Ollama server URL.")
     parser.add_argument("--base-url", default=None, help="Provider API base URL for openai, anthropic, or deepseek.")
@@ -284,14 +284,14 @@ def build_arg_parser():
 
 
 def main(argv=None):
-    args = build_arg_parser().parse_args(argv)
-    agent = build_agent(args)
+    args = build_arg_parser().parse_args(argv) #解析命令行参数
+    agent = build_agent(args) # 组装运行时对象
 
     model = getattr(agent.model_client, "model", getattr(args, "model", DEFAULT_OLLAMA_MODEL))
     host = getattr(agent.model_client, "host", getattr(agent.model_client, "base_url", getattr(args, "host", DEFAULT_OLLAMA_HOST)))
     print(build_welcome(agent, model=model, host=host))
 
-    if args.prompt:
+    if args.prompt: # 如果有 args.prompt（例如 moonclaw "帮我改bug"
         # one-shot 模式：只跑一次 ask，不进入 REPL 循环。
         prompt = " ".join(args.prompt).strip()
         if prompt:
@@ -302,19 +302,19 @@ def main(argv=None):
                 print(str(exc), file=sys.stderr)
                 return 1
         return 0
-
+    # 不是 one-shot模式的时候，就进入交互模式
     while True:
         # 交互模式：每次读取一条用户输入，交给同一个 agent，
         # 因此 session history 和 working memory 会跨轮延续。
         try:
-            user_input = input("\npico> ").strip()
+            user_input = input("\nmoonclaw> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("")
             return 0
 
         if not user_input:
             continue
-        if user_input in {"/exit", "/quit"}:
+        if user_input in {"/exit", "/quit"}: # 一些内置命令的处理
             return 0
         if user_input == "/help":
             print(HELP_DETAILS)
@@ -326,12 +326,12 @@ def main(argv=None):
             print(agent.session_path)
             continue
         if user_input == "/reset":
-            agent.reset()
+            agent.reset()  # 清空记忆
             print("session reset")
             continue
 
         print()
         try:
-            print(agent.ask(user_input))
+            print(agent.ask(user_input)) # 把你的话发给 AI → 等待回答 → 打印出来
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)

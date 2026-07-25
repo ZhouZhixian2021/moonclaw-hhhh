@@ -92,29 +92,29 @@ class ContextManager:
           是怎么被拼出来的。
 
         在 agent 链路里的位置：
-        它位于 `Pico.ask()` 的每轮模型调用之前，是“真正发请求给模型”
+        它位于 `MoonClaw.ask()` 的每轮模型调用之前，是”真正发请求给模型”
         的最后一道组装工序。`WorkspaceContext` 提供稳定前缀，`LayeredMemory`
         提供工作记忆，这个函数则把它们和当前请求合成一份可控大小的 prompt。
         """
-        user_message = str(user_message)
-        self.section_floors = self._compute_section_floors()
-        memory_enabled = True
+        user_message = str(user_message) # 把用户输入转成字符串
+        self.section_floors = self._compute_section_floors() #重新计算每个 section 的最低预算
+        memory_enabled = True # 这三个是默认开启
         relevant_memory_enabled = True
         context_reduction_enabled = True
-        if hasattr(self.agent, "feature_enabled"):
+        if hasattr(self.agent, "feature_enabled"): #如果 agent 有功能开关，就读取真实开关
             memory_enabled = self.agent.feature_enabled("memory")
             relevant_memory_enabled = self.agent.feature_enabled("relevant_memory")
             context_reduction_enabled = self.agent.feature_enabled("context_reduction")
-        section_texts = {
+        section_texts = { # 组装，构造4类基础section
             "prefix": str(getattr(self.agent, "prefix", "")),
             "memory": "Memory:\n- disabled" if not memory_enabled else str(self.agent.memory_text()),
             "history": "",
             CURRENT_REQUEST_SECTION: f"Current user request:\n{user_message}",
         }
         checkpoint_text = ""
-        if hasattr(self.agent, "render_checkpoint_text"):
+        if hasattr(self.agent, "render_checkpoint_text"): # 如果 agent 支持 checkpoint 渲染，就取当前 checkpoint 文本
             checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()
-        if checkpoint_text:
+        if checkpoint_text: # 如果有 checkpoint，就追加到 prefix 后面
             section_texts["prefix"] = section_texts["prefix"] + "\n\n" + checkpoint_text
         selected_notes = []
         if memory_enabled and relevant_memory_enabled and hasattr(self.agent, "memory") and hasattr(self.agent.memory, "retrieval_candidates"):
@@ -134,25 +134,25 @@ class ContextManager:
             )
             return prompt, metadata
 
-        budgets = dict(self.section_budgets)
-        rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
-        prompt = self._assemble_prompt(rendered)
+        budgets = dict(self.section_budgets) # 复制 section 预算
+        rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes) # 按预算渲染每个 section
+        prompt = self._assemble_prompt(rendered) # 把所有 section 按固定顺序拼成最终 prompt
         reduction_log = []
 
         # 如果 prompt 超预算，就按固定顺序不断压缩。
         # 这里的顺序体现了平台偏好：
         # 先牺牲 relevant_memory，再牺牲 history，然后才动 memory 和 prefix。
         # 最新用户请求永远不裁剪，因为那是本轮最重要的输入。
-        while len(prompt) > self.total_budget:
-            overflow = len(prompt) - self.total_budget
+        while len(prompt) > self.total_budget: # 如果 prompt 超过总预算，就进入压缩循环
+            overflow = len(prompt) - self.total_budget # 计算超了多少字符
             reduced = False
-            for section in self.reduction_order:
-                floor = int(self.section_floors.get(section, 0))
-                current_budget = int(budgets.get(section, 0))
-                if current_budget <= floor:
+            for section in self.reduction_order: # 按压缩优先级尝试压缩
+                floor = int(self.section_floors.get(section, 0)) # 最低预算
+                current_budget = int(budgets.get(section, 0)) # 当前预算
+                if current_budget <= floor: # 如果已经压到最低预算，就不能再压，跳过
                     continue
-                new_budget = max(floor, current_budget - overflow)
-                if new_budget >= current_budget:
+                new_budget = max(floor, current_budget - overflow) #计算新的预算，不能低于 floor
+                if new_budget >= current_budget: # 如果新预算没有变小，跳过
                     continue
                 reduction_log.append(
                     {
@@ -162,9 +162,9 @@ class ContextManager:
                         "overflow_chars": overflow,
                     }
                 )
-                budgets[section] = new_budget
-                rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes)
-                prompt = self._assemble_prompt(rendered)
+                budgets[section] = new_budget # 应用新的预算
+                rendered = self._render_sections(section_texts, budgets, selected_notes=selected_notes) # 重新渲染
+                prompt = self._assemble_prompt(rendered) # 重新组装prompt
                 reduced = True
                 break
             if not reduced:
@@ -449,7 +449,7 @@ class ContextManager:
                 rendered["memory"].rendered,
                 rendered["relevant_memory"].rendered,
                 rendered["history"].rendered,
-                rendered[CURRENT_REQUEST_SECTION].rendered,
+                rendered[CURRENT_REQUEST_SECTION].rendered, # 当前请求放最后，模型对末尾内容通常更敏感
             ]
         ).strip()
 

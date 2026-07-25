@@ -1,6 +1,6 @@
 """Agent 运行时核心逻辑。
 
-Pico 就是包在模型外面的控制循环：负责组 prompt、解析模型输出、
+MoonClaw 就是包在模型外面的控制循环：负责组 prompt、解析模型输出、
 校验并执行工具、写 trace、更新工作记忆，以及在合适的时候停下来。
 """
 
@@ -84,7 +84,7 @@ class SessionStore:
         return files[-1].stem if files else None
 
 
-class Pico:
+class MoonClaw:
     def __init__(
         self,
         model_client,
@@ -117,7 +117,7 @@ class Pico:
         self.feature_flags = dict(DEFAULT_FEATURE_FLAGS)
         if feature_flags:
             self.feature_flags.update({str(key): bool(value) for key, value in feature_flags.items()})
-        self.run_store = run_store or RunStore(Path(workspace.repo_root) / ".pico" / "runs")
+        self.run_store = run_store or RunStore(Path(workspace.repo_root) / ".moonclaw" / "runs")
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
             "created_at": now(),
@@ -151,7 +151,7 @@ class Pico:
         }
 
     @classmethod
-    def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
+    def from_session(cls, model_client, workspace, session_store, session_id, **kwargs): #从已保存 session 直接恢复 MoonClaw。
         return cls(
             model_client=model_client,
             workspace=workspace,
@@ -159,7 +159,7 @@ class Pico:
             session=session_store.load(session_id),
             **kwargs,
         )
-
+    # 确保 session 结构正确
     def _ensure_session_shape(self):
         self.session.setdefault("history", [])
         self.session.setdefault("memory", memorylib.default_memory_state())
@@ -175,34 +175,34 @@ class Pico:
         resume_state = self.session.setdefault("resume_state", {})
         if not isinstance(resume_state, dict):
             self.session["resume_state"] = {}
-
+    # 生成“当前运行身份签名”（模型/策略/参数/工具签名/工作区指纹）。
     def current_runtime_identity(self):
         return {
             "session_id": self.session.get("id", ""),
-            "cwd": str(self.root),
-            "model": str(getattr(self.model_client, "model", "")),
-            "model_client": self.model_client.__class__.__name__,
-            "approval_policy": self.approval_policy,
+            "cwd": str(self.root), # 工作目录
+            "model": str(getattr(self.model_client, "model", "")), # 模型名称
+            "model_client": self.model_client.__class__.__name__, # 模型客户端类名
+            "approval_policy": self.approval_policy, # 审批策略
             "read_only": bool(self.read_only),
             "max_steps": int(self.max_steps),
             "max_new_tokens": int(self.max_new_tokens),
             "feature_flags": dict(self.feature_flags),
             "shell_env_allowlist": list(self.shell_env_allowlist),
-            "workspace_fingerprint": getattr(getattr(self, "prefix_state", None), "workspace_fingerprint", self.workspace.fingerprint()),
-            "tool_signature": self.tool_signature(),
+            "workspace_fingerprint": getattr(getattr(self, "prefix_state", None), "workspace_fingerprint", self.workspace.fingerprint()), # 工作区指纹9核心）
+            "tool_signature": self.tool_signature(), # 可用工具签名
         }
-
+    # 取 session["checkpoints"]（先确保 shape）
     def checkpoint_state(self):
         self._ensure_session_shape()
         return self.session["checkpoints"]
-
+    # 按 current_id 返回当前 checkpoint 对象
     def current_checkpoint(self):
         state = self.checkpoint_state()
         checkpoint_id = str(state.get("current_id", "")).strip()
         if not checkpoint_id:
             return None
         return state.get("items", {}).get(checkpoint_id)
-
+    # 删除已过期 file summary（按文件 freshness 哈希比对）
     def invalidate_stale_memory(self):
         invalidated = self.memory.invalidate_stale_file_summaries()
         self.session["memory"] = self.memory.to_dict()
@@ -210,15 +210,18 @@ class Pico:
 
     def evaluate_resume_state(self):
         previous_resume_state = dict(self.session.get("resume_state", {}) or {})
+        # 第1步：先清理掉文件内容已变更的 file_summaries(通过sha256对比)
         invalidated = self.invalidate_stale_memory()
         checkpoint = self.current_checkpoint()
-        status = CHECKPOINT_NONE_STATUS
+        status = CHECKPOINT_NONE_STATUS # 默认：无 checkpoint
         stale_paths = list(invalidated)
         mismatch_fields = []
         if checkpoint:
+            # 第2步：检查 checkpoint schema 版本是否兼容
             if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
                 status = CHECKPOINT_SCHEMA_MISMATCH_STATUS
             else:
+                # 第3步：检查 checkpoint 中记录的 key_files 的 freshness
                 for item in checkpoint.get("key_files", []):
                     path = str(item.get("path", "")).strip()
                     if not path:
@@ -227,6 +230,7 @@ class Pico:
                     current = memorylib.file_freshness(path, self.root)
                     if expected != current and path not in stale_paths:
                         stale_paths.append(path)
+                # 第4步：检查 runtime_identity（这就是 workspace drift 的核心）
                 saved_identity = dict(checkpoint.get("runtime_identity", {}) or self.session.get("runtime_identity", {}) or {})
                 current_identity = self.current_runtime_identity()
                 identity_keys = (
@@ -246,14 +250,15 @@ class Pico:
                     if key not in saved_identity:
                         continue
                     if saved_identity.get(key) != current_identity.get(key):
-                        mismatch_fields.append(key)
+                        mismatch_fields.append(key) # 现场配置变了 → 记录 mismatch
                 mismatch_fields.sort()
+                # 第5步：根据检查结果判定状态
                 if stale_paths:
-                    status = CHECKPOINT_PARTIAL_STALE_STATUS
+                    status = CHECKPOINT_PARTIAL_STALE_STATUS # 有文件过期
                 elif mismatch_fields:
-                    status = CHECKPOINT_WORKSPACE_MISMATCH_STATUS
+                    status = CHECKPOINT_WORKSPACE_MISMATCH_STATUS # runtime identity对不上，即workspace drift
                 else:
-                    status = CHECKPOINT_FULL_VALID_STATUS
+                    status = CHECKPOINT_FULL_VALID_STATUS # 完全有效
 
         resume_state = {
             "status": status,
@@ -302,10 +307,10 @@ class Pico:
             bucket.remove(item)
         bucket.append(item)
         del bucket[:-limit]
-
+    # 构建白名单工具表
     def build_tools(self):
         return toolkit.build_tool_registry(self)
-
+    # 用于前缀有效性判断
     def tool_signature(self):
         payload = []
         for name in sorted(self.tools):
@@ -319,7 +324,7 @@ class Pico:
                 }
             )
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-
+    # 生成系统前缀（规则、工具说明、示例、workspace 文本）
     def build_prefix(self):
         tool_lines = []
         for name, tool in self.tools.items():
@@ -341,7 +346,7 @@ class Pico:
         # 它是谁、工具怎么调用、当前仓库是什么状态，都写在这里。
         text = textwrap.dedent(
             f"""\
-            You are pico, a small local coding agent working inside a local repository.
+            You are moonClaw, a small local coding agent working inside a local repository.
 
             Rules:
             - Use tools instead of guessing about the workspace.
@@ -377,16 +382,17 @@ class Pico:
             tool_signature=self.tool_signature(),
             built_at=now(),
         )
-
+    # 把前缀对象应用到当前 MoonClaw 实例
     def _apply_prefix_state(self, prefix_state):
         self.prefix_state = prefix_state
         self.prefix = prefix_state.text
-
+    
+    # 检查 workspace 或 prompt prefix 是否需要刷新；如果需要，就重建并应用新的 prefix
     def refresh_prefix(self, force=False):
         previous_hash = getattr(getattr(self, "prefix_state", None), "hash", None)
         previous_workspace_fingerprint = getattr(getattr(self, "prefix_state", None), "workspace_fingerprint", None)
 
-        # 工作区事实相对稳定，所以这里按整体刷新；
+        # 工作区 事实相对稳定，所以这里按整体刷新；
         # 只有这些事实真的变化了，才重建完整 prefix。
         refreshed_workspace = WorkspaceContext.build(self.root)
         refreshed_workspace_fingerprint = refreshed_workspace.fingerprint()
@@ -525,9 +531,9 @@ class Pico:
         return metadata
 
     def _build_prompt_and_metadata(self, user_message):
-        refresh = self.refresh_prefix()
-        self.resume_state = self.evaluate_resume_state()
-        prompt, metadata = self.context_manager.build(user_message)
+        refresh = self.refresh_prefix() # 刷新 prefix
+        self.resume_state = self.evaluate_resume_state() # 评估恢复状态
+        prompt, metadata = self.context_manager.build(user_message) # 构建 prompt 和 metadata
         # 这里把“这轮 prompt 是怎么拼出来的”连同缓存相关状态一起记下来，
         # 后面 trace/report 才能解释清楚：为什么这一轮 prefix 变了、缓存有没有命中。
         metadata.update(
@@ -553,7 +559,7 @@ class Pico:
                 "runtime_identity_mismatch_fields": list(self.resume_state.get("runtime_identity_mismatch_fields", [])),
             }
         )
-        metadata.update(self.detected_secret_env_summary())
+        metadata.update(self.detected_secret_env_summary()) # 补充检测到的敏感环境变量摘要
         return prompt, metadata
 
     def emit_trace(self, task_state, event, payload=None):
@@ -770,18 +776,18 @@ class Pico:
         它是 CLI 和底层工具/模型之间的核心桥梁。CLI 收到用户输入后基本只做
         一件事：调用 `agent.ask()`。而 `ask()` 内部再去驱动 `ContextManager`
         组 prompt、`model_client.complete()` 调模型、`run_tool()` 执行动作。
-        如果新人想理解 pico 是怎么“从一句话跑成一个 agent 流程”的，
+        如果新人想理解 moonClaw 是怎么“从一句话跑成一个 agent 流程”的，
         这里就是最关键的入口。
         """
-        run_started_at = time.monotonic()
-        self.memory.set_task_summary(user_message)
-        self.record({"role": "user", "content": user_message, "created_at": now()})
-
+        run_started_at = time.monotonic() # 记录运行起始时间
+        self.memory.set_task_summary(user_message) # 把用户消息写进task_summary
+        self.record({"role": "user", "content": user_message, "created_at": now()}) # 用户消息写入session history
+        # 创建 TaskState
         task_state = TaskState.create(run_id=self.new_run_id(), task_id=self.new_task_id(), user_request=user_message)
         task_state.resume_status = self.resume_state.get("status", CHECKPOINT_NONE_STATUS)
         self.current_task_state = task_state
-        self.current_run_dir = self.run_store.start_run(task_state)
-        self.emit_trace(
+        self.current_run_dir = self.run_store.start_run(task_state) #写入run目录
+        self.emit_trace( # 发第一条trace事件 run_started
             task_state,
             "run_started",
             {
@@ -790,8 +796,8 @@ class Pico:
             },
         )
 
-        tool_steps = 0
-        attempts = 0
+        tool_steps = 0 # 统计真正进入执行阶段的工具调用次数，tool_steps很高，说明它真的在执行很多动作
+        attempts = 0 # 统计模型被调了多少轮，attemps很高，但tool_steps很低，说明模型输出格式不好或者一直在retry
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
 
         # 这是 agent 的主循环，可以按“感知 -> 决策 -> 行动 -> 记录”来理解：
@@ -803,10 +809,10 @@ class Pico:
         while tool_steps < self.max_steps and attempts < max_attempts:
             attempts += 1
             task_state.record_attempt()
-            self.run_store.write_task_state(task_state)
+            self.run_store.write_task_state(task_state) # 落盘
             prompt_started_at = time.monotonic()
-            prompt, prompt_metadata = self._build_prompt_and_metadata(user_message)
-            self.emit_trace(
+            prompt, prompt_metadata = self._build_prompt_and_metadata(user_message) # 构建prompt
+            self.emit_trace( # 记录 prompt_built trace（包含构建耗时）
                 task_state,
                 "prompt_built",
                 {
@@ -863,18 +869,18 @@ class Pico:
                     "prompt_cache_key": prompt_metadata.get("prompt_cache_key"),
                 },
             )
-            prompt_cache_key = None
-            prompt_cache_retention = None
-            if getattr(self.model_client, "supports_prompt_cache", False):
+            prompt_cache_key = None # 缓存键，用来告诉模型后端“这段稳定 prompt 可以复用”
+            prompt_cache_retention = None # 缓存保留策略，这里后面会设成 "in_memory"
+            if getattr(self.model_client, "supports_prompt_cache", False): #取出这个属性，没有就默认为False
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
-                prompt_cache_retention = "in_memory"
-            model_started_at = time.monotonic()
-            raw = self.model_client.complete(
+                prompt_cache_retention = "in_memory" # prompt cache 只做内存级保留，不一定长期持久化
+            model_started_at = time.monotonic() # 记录模型调用时间
+            raw = self.model_client.complete( # 真正发请求给模型的地方
                 prompt,
-                self.max_new_tokens,
-                prompt_cache_key=prompt_cache_key,
-                prompt_cache_retention=prompt_cache_retention,
+                self.max_new_tokens, # 限制模型最大输出 token
+                prompt_cache_key=prompt_cache_key, # 可选缓存键
+                prompt_cache_retention=prompt_cache_retention, # 可选缓存策略
             )
             completion_metadata = dict(getattr(self.model_client, "last_completion_metadata", {}) or {})
             if completion_metadata:
@@ -894,7 +900,7 @@ class Pico:
                 },
             )
 
-            if kind == "tool":
+            if kind == "tool": # 执行 run_tool，记录 tool 历史、trace、checkpoint，继续下一轮
                 tool_steps += 1
                 name = payload.get("name", "")
                 args = payload.get("args", {})
@@ -934,12 +940,12 @@ class Pico:
                 )
                 continue
 
-            if kind == "retry":
+            if kind == "retry": # 记录 assistant 提示，继续
                 self.record({"role": "assistant", "content": payload, "created_at": now()})
                 self.run_store.write_task_state(task_state)
                 continue
-
-            final = (payload or raw).strip()
+            # 记录 assistant，完成 task，提升 durable memory，checkpoint，写 report，返回 final
+            final = (payload or raw).strip() # 最终答案
             self.record({"role": "assistant", "content": final, "created_at": now()})
             task_state.finish_success(final)
             self.promote_durable_memory(user_message, final)
@@ -966,10 +972,10 @@ class Pico:
             self.run_store.write_report(task_state, self.redact_artifact(self.build_report(task_state)))
             return final
 
-        if attempts >= max_attempts and tool_steps < self.max_steps:
+        if attempts >= max_attempts and tool_steps < self.max_steps: # “模型响应多次无效”停止
             final = "Stopped after too many malformed model responses without a valid tool call or final answer."
             task_state.stop_retry_limit(final)
-        else:
+        else: #“达到工具步数上限”停止
             final = "Stopped after reaching the step limit without a final answer."
             task_state.stop_step_limit(final)
         self.record({"role": "assistant", "content": final, "created_at": now()})
@@ -1230,35 +1236,35 @@ class Pico:
         # 1. <tool>...</tool> 里包 JSON，适合简短调用
         # 2. XML 风格属性/子标签，适合写文件这类多行内容
         if "<tool>" in raw and ("<final>" not in raw or raw.find("<tool>") < raw.find("<final>")):
-            body = Pico.extract(raw, "tool")
+            body = MoonClaw.extract(raw, "tool")
             try:
                 payload = json.loads(body)
             except Exception:
-                return "retry", Pico.retry_notice("model returned malformed tool JSON")
+                return "retry", MoonClaw.retry_notice("model returned malformed tool JSON")
             if not isinstance(payload, dict):
-                return "retry", Pico.retry_notice("tool payload must be a JSON object")
+                return "retry", MoonClaw.retry_notice("tool payload must be a JSON object")
             if not str(payload.get("name", "")).strip():
-                return "retry", Pico.retry_notice("tool payload is missing a tool name")
+                return "retry", MoonClaw.retry_notice("tool payload is missing a tool name")
             args = payload.get("args", {})
             if args is None:
                 payload["args"] = {}
             elif not isinstance(args, dict):
-                return "retry", Pico.retry_notice()
+                return "retry", MoonClaw.retry_notice()
             return "tool", payload
         if "<tool" in raw and ("<final>" not in raw or raw.find("<tool") < raw.find("<final>")):
-            payload = Pico.parse_xml_tool(raw)
+            payload = MoonClaw.parse_xml_tool(raw)
             if payload is not None:
                 return "tool", payload
-            return "retry", Pico.retry_notice()
+            return "retry", MoonClaw.retry_notice()
         if "<final>" in raw:
-            final = Pico.extract(raw, "final").strip()
+            final = MoonClaw.extract(raw, "final").strip()
             if final:
                 return "final", final
-            return "retry", Pico.retry_notice("model returned an empty <final> answer")
+            return "retry", MoonClaw.retry_notice("model returned an empty <final> answer")
         raw = raw.strip()
         if raw:
             return "final", raw
-        return "retry", Pico.retry_notice("model returned an empty response")
+        return "retry", MoonClaw.retry_notice("model returned an empty response")
 
     @staticmethod
     def retry_notice(problem=None):
@@ -1277,7 +1283,7 @@ class Pico:
         match = re.search(r"<tool(?P<attrs>[^>]*)>(?P<body>.*?)</tool>", raw, re.S)
         if not match:
             return None
-        attrs = Pico.parse_attrs(match.group("attrs"))
+        attrs = MoonClaw.parse_attrs(match.group("attrs"))
         name = str(attrs.pop("name", "")).strip()
         if not name:
             return None
@@ -1286,7 +1292,7 @@ class Pico:
         args = dict(attrs)
         for key in ("content", "old_text", "new_text", "command", "task", "pattern", "path"):
             if f"<{key}>" in body:
-                args[key] = Pico.extract_raw(body, key)
+                args[key] = MoonClaw.extract_raw(body, key)
 
         body_text = body.strip("\n")
         if name == "write_file" and "content" not in args and body_text:
@@ -1314,7 +1320,7 @@ class Pico:
         if end == -1:
             return text[start:].strip()
         return text[start:end].strip()
-
+                                  
     @staticmethod
     def extract_raw(text, tag):
         start_tag = f"<{tag}>"
@@ -1346,4 +1352,5 @@ class Pico:
         return resolved
 
 
-MiniAgent = Pico
+MiniAgent = MoonClaw
+Pico = MoonClaw  # backward compatibility

@@ -1,6 +1,6 @@
-# pico
+# moonClaw
 
-`pico` 是一个面向代码仓库的轻量本地 coding agent。它直接跑在终端里，先看当前工作区，再用一组受约束的工具去读文件、改文件、跑命令，并把会话状态保存在本地 `.pico/` 目录里。
+`moonClaw` 是一个面向代码仓库的轻量本地 coding agent。它直接跑在终端里，先看当前工作区，再用一组受约束的工具去读文件、改文件、跑命令，并把会话状态保存在本地 `.moonclaw/` 目录里。
 
 它更像一个能在仓库里持续工作的命令行助手，不是纯聊天窗口。你可以拿它做代码排查、测试修复、仓库分析，或者让它在当前项目里执行一次性的工程任务。
 
@@ -13,11 +13,11 @@
 
 ## 主要特性
 
-- 包名是 `pico`
-- CLI 命令是 `pico`
-- 模块入口是 `python -m pico`
-- 会话保存在 `.pico/sessions/`
-- 每次运行的工件保存在 `.pico/runs/<run_id>/`
+- 包名是 `moonclaw`
+- CLI 命令是 `moonclaw`
+- 模块入口是 `python -m moonclaw`
+- 会话保存在 `.moonclaw/sessions/`
+- 每次运行的工件保存在 `.moonclaw/runs/<run_id>/`
 - 支持四类模型后端：
   - Ollama
   - OpenAI 兼容 Responses API
@@ -28,15 +28,15 @@
 
 CLI 帮助信息：
 
-![pico help](assets/screenshots/pico-help.png)
+![moonclaw help](assets/screenshots/pico-help.png)
 
 启动界面：
 
-![pico start](assets/screenshots/pico-start.png)
+![moonclaw start](assets/screenshots/pico-start.png)
 
-REPL 内置命令与会话路径：
+REPL `moonClaw` 内置命令与会话路径：
 
-![pico repl](assets/screenshots/pico-repl.png)
+![moonclaw repl](assets/screenshots/pico-repl.png)
 
 ## 安装
 
@@ -59,25 +59,25 @@ pip install -e .
 在当前仓库里启动交互模式。当前推荐使用 DeepSeek：
 
 ```bash
-uv run pico --provider deepseek
+uv run moonclaw --provider deepseek
 ```
 
 指定另一个工作目录：
 
 ```bash
-uv run pico --cwd /path/to/repo
+uv run moonclaw --cwd /path/to/repo
 ```
 
 直接跑一次性任务：
 
 ```bash
-uv run pico --provider deepseek "inspect the test failures and propose a fix"
+uv run moonclaw --provider deepseek "inspect the test failures and propose a fix"
 ```
 
 如果当前环境已经安装过包，也可以直接这样启动：
 
 ```bash
-python -m pico --provider deepseek
+python -m moonclaw --provider deepseek
 ```
 
 ## 模型后端
@@ -101,7 +101,7 @@ cp .env.example .env
 ```bash
 ollama serve
 ollama pull qwen3.5:4b
-uv run pico --provider ollama --model qwen3.5:4b
+uv run moonclaw --provider ollama --model qwen3.5:4b
 ```
 
 ### OpenAI 兼容接口
@@ -123,7 +123,7 @@ PICO_OPENAI_MODEL="gpt-5.4"
 ```
 
 ```bash
-uv run pico --provider openai
+uv run moonclaw --provider openai
 ```
 
 ### Anthropic 兼容接口
@@ -137,10 +137,10 @@ PICO_ANTHROPIC_MODEL="claude-sonnet-4-6"
 ```
 
 ```bash
-uv run pico --provider anthropic
+uv run moonclaw --provider anthropic
 ```
 
-如果你的服务端对多个兼容接口复用了同一套密钥，`pico` 也支持从 `PICO_ANTHROPIC_API_KEY` 回退到 `ANTHROPIC_API_KEY`、`PICO_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`PICO_OPENAI_API_KEY` 或 `OPENAI_API_KEY`。
+如果你的服务端对多个兼容接口复用了同一套密钥，`moonClaw` 也支持从 `MOONCLAW_ANTHROPIC_API_KEY` 回退到 `ANTHROPIC_API_KEY`、`MOONCLAW_RIGHT_CODES_API_KEY`、`RIGHT_CODES_API_KEY`、`MOONCLAW_OPENAI_API_KEY` 或 `OPENAI_API_KEY`。
 
 ### DeepSeek
 
@@ -150,14 +150,14 @@ PICO_DEEPSEEK_MODEL="deepseek-v4-pro"
 ```
 
 ```bash
-uv run pico --provider deepseek
+uv run moonclaw --provider deepseek
 ```
 
 默认 DeepSeek base URL 是 `https://api.deepseek.com/anthropic`，走 DeepSeek 的 Anthropic 兼容接口。如果需要改到代理服务，可以设置 `PICO_DEEPSEEK_API_BASE` 或启动时传 `--base-url`。
 
 ## 常用交互命令
 
-- `/help`：查看内置命令
+- `/help`：查看`moonClaw` 内置命令
 - `/memory`：查看提炼后的工作记忆
 - `/session`：查看当前会话文件路径
 - `/reset`：清空当前会话状态
@@ -165,13 +165,13 @@ uv run pico --provider deepseek
 
 ## 安全与持久化
 
-`pico` 不会默认把所有动作都放开。像 shell 执行、文件写入这类高风险操作，会受审批模式控制：
+`moonClaw` 不会默认把所有动作都放开。像 shell 执行、文件写入这类高风险操作，会受审批模式控制：
 
 - `--approval ask`
 - `--approval auto`
 - `--approval never`
 
-每次运行结束后，都会在 `.pico/runs/<run_id>/` 下写出这些文件：
+每次运行结束后，都会在 `.moonclaw/runs/<run_id>/` 下写出这些文件：
 
 - `task_state.json`
 - `trace.jsonl`

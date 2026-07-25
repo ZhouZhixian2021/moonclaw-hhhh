@@ -84,7 +84,7 @@ def validate_tool(agent, name, args):
 
     if name == "list_files":
         path = agent.path(args.get("path", "."))
-        if not path.is_dir():
+        if not path.is_dir(): # 不是目录的话fdddds
             raise ValueError("path is not a directory")
         return
 
@@ -265,9 +265,9 @@ def tool_delegate(agent, args):
     if not task:
         raise ValueError("task must not be empty")
 
-    from .runtime import Pico
+    from .runtime import MoonClaw
 
-    child = Pico(
+    child = MoonClaw(
         model_client=agent.model_client,
         workspace=agent.workspace,
         session_store=agent.session_store,

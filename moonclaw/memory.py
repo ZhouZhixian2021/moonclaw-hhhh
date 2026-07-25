@@ -56,6 +56,7 @@ def default_memory_state():
     }
 
 
+# 里面的retrieval_candidates与下面一个函数重名，注意区分
 class DurableMemoryStore:
     def __init__(self, root):
         self.root = Path(root)
@@ -142,8 +143,9 @@ class DurableMemoryStore:
         return None
 
     def retrieval_candidates(self, query, limit=3):
-        query_tokens = _tokenize(query)
-        ranked = []
+        # 把用户请求拆成关键词
+        query_tokens = _tokenize(query) # _tokenize()是按英文数字下划线提取token，所以对英文标识符、文件名、tag很有效
+        ranked = [] # 准备排序列表，用来存候选记忆
         for topic in self.load_index():
             notes = self.load_topic_notes(topic["topic"])
             for note in notes:
@@ -261,7 +263,6 @@ def resolve_workspace_path(raw_path, workspace_root=None):
         return None
     return resolved
 
-
 def canonicalize_path(raw_path, workspace_root=None):
     resolved = resolve_workspace_path(raw_path, workspace_root)
     if resolved is None:
@@ -270,7 +271,6 @@ def canonicalize_path(raw_path, workspace_root=None):
         return Path(str(raw_path)).as_posix()
     root = Path(workspace_root).resolve()
     return resolved.relative_to(root).as_posix()
-
 
 def file_freshness(raw_path, workspace_root=None):
     resolved = resolve_workspace_path(raw_path, workspace_root)
@@ -385,7 +385,7 @@ def normalize_memory_state(state, workspace_root=None):
     episodic_notes = episodic_notes[-EPISODIC_NOTE_LIMIT:]
     state["episodic_notes"] = episodic_notes
 
-    file_summaries = state.get("file_summaries")
+    v = state.get("file_summaries")
     if not isinstance(file_summaries, dict):
         file_summaries = {}
     normalized_file_summaries = {}
@@ -418,7 +418,7 @@ def normalize_memory_state(state, workspace_root=None):
     state["task"] = working["task_summary"]
     state["files"] = list(working["recent_files"])
     state["notes"] = [note["text"] for note in episodic_notes]
-    durable_root = Path(workspace_root) / ".pico" / "memory" if workspace_root is not None else None
+    durable_root = Path(workspace_root) / ".moonclaw" / "memory" if workspace_root is not None else None
     durable_store = DurableMemoryStore(durable_root) if durable_root is not None else None
     state["durable_topics"] = durable_store.topic_slugs() if durable_store is not None else []
     return state
@@ -517,24 +517,24 @@ def summarize_read_result(result, limit=180):
 
 
 def retrieval_candidates(state, query, limit=3, workspace_root=None):
-    state = normalize_memory_state(state, workspace_root)
-    query_tokens = _tokenize(query)
-    ranked = []
-    for note in state["episodic_notes"]:
+    state = normalize_memory_state(state, workspace_root) # 规范化memory状态
+    query_tokens = _tokenize(query) # 把用户请求拆成关键词
+    ranked = [] # 准备排序列表，用来存候选记忆
+    for note in state["episodic_notes"]: # 遍历短期记忆
         # 召回逻辑故意保持简单透明：先看 tag 精确命中，
         # 再看关键词重叠，最后看新旧程度。这里不引入 embedding。
-        note_tags = {tag.lower() for tag in note.get("tags", [])}
-        note_tokens = _tokenize(note.get("text", "")) | _tokenize(note.get("source", "")) | note_tags
-        exact_tag_match = int(bool(query_tokens & note_tags))
-        keyword_overlap = len(query_tokens & note_tokens)
-        if exact_tag_match == 0 and keyword_overlap == 0:
+        note_tags = {tag.lower() for tag in note.get("tags", [])} # 取出note中的tag
+        note_tokens = _tokenize(note.get("text", "")) | _tokenize(note.get("source", "")) | note_tags # 取出note中的text和source，并转换为token，即生成note的关键词集合
+        exact_tag_match = int(bool(query_tokens & note_tags)) # 判断tag是否命中，只要交集非空，说明用户请求命中了note中的tag
+        keyword_overlap = len(query_tokens & note_tokens) # 计算关键词重叠数量（请求关键词和note关键词重叠了几个）
+        if exact_tag_match == 0 and keyword_overlap == 0: # 完全不相关就跳过
             continue
-        recency = _parse_timestamp(note.get("created_at"))
-        note_index = int(note.get("note_index", 0))
-        ranked.append(((exact_tag_match, keyword_overlap, recency, note_index), note))
+        recency = _parse_timestamp(note.get("created_at")) # 解析时间新旧，越新的note，时间戳越大（可以理解为更新时间）
+        note_index = int(note.get("note_index", 0)) # note_index是note在短期记忆中的顺序,通常越大越新
+        ranked.append(((exact_tag_match, keyword_overlap, recency, note_index), note)) # 加入候选列表
 
     if workspace_root is not None:
-        durable_store = DurableMemoryStore(Path(workspace_root) / ".pico" / "memory")
+        durable_store = DurableMemoryStore(Path(workspace_root) / ".moonclaw" / "memory")
         for note in durable_store.retrieval_candidates(query, limit=limit):
             note_tags = {tag.lower() for tag in note.get("tags", [])}
             note_tokens = _tokenize(note.get("text", "")) | _tokenize(note.get("source", "")) | note_tags
@@ -600,7 +600,7 @@ class LayeredMemory:
     def __init__(self, state=None, workspace_root=None):
         self.workspace_root = workspace_root
         self.state = normalize_memory_state(state, workspace_root)
-        self.durable_store = DurableMemoryStore(Path(workspace_root) / ".pico" / "memory") if workspace_root is not None else None
+        self.durable_store = DurableMemoryStore(Path(workspace_root) / ".moonclaw" / "memory") if workspace_root is not None else None
 
     def to_dict(self):
         self.state = normalize_memory_state(self.state, self.workspace_root)

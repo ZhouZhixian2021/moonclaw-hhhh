@@ -21,7 +21,7 @@ dist/
 htmlcov/
 
 # Temporary files
-.mini-coding-agent
+.moonclaw-agent
 *.tmp
 *.temp
 *.swp
@@ -31,7 +31,7 @@ htmlcov/
 # Local scratch space
 tmp/
 .worktrees/
-.pico/
+.moonclaw/
 artifacts/
 readme_intro_locked/
 
@@ -47,4 +47,4 @@ docs/
 .DS_Store
 
 # Packaging metadata
-pico.egg-info/
+moonclaw.egg-info/

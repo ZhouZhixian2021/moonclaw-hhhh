@@ -11,26 +11,26 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-MAX_TOOL_OUTPUT = 4000
-MAX_HISTORY = 12000
+MAX_TOOL_OUTPUT = 4000 # 默认输出截断上限
+MAX_HISTORY = 12000 # 历史长度上限（本文件里未直接使用）
 # 这些文件最可能直接影响 agent 的行动方式。
 # 我们不会预加载整个仓库，只会先给模型一小份“导航包”。
-DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
-IGNORED_PATH_NAMES = {".git", ".pico", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
+DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json") #启动时优先读取的4个文档白名单
+IGNORED_PATH_NAMES = {".git", ".moonclaw", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"} #忽略目录名集合（本文件里当前未直接使用）
 
 
-def now():
+def now(): # 生成当前 UTC 时间的 ISO 字符串
     return datetime.now(timezone.utc).isoformat()
 
 
-def clip(text, limit=MAX_TOOL_OUTPUT):
+def clip(text, limit=MAX_TOOL_OUTPUT): #截断长文本，防止内容过大；被截断会附加提示
     text = str(text)
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated {len(text) - limit} chars]"
 
 
-def middle(text, limit):
+def middle(text, limit): # 中间截断：保留前后，省略中间（...）
     text = str(text).replace("\n", " ")
     if len(text) <= limit:
         return text
@@ -52,10 +52,10 @@ class WorkspaceContext:
         self.project_docs = project_docs
 
     @classmethod
-    def build(cls, cwd, repo_root_override=None):
-        cwd = Path(cwd).resolve()
+    def build(cls, cwd, repo_root_override=None): # 从 cwd 出发收集 Git 状态 + 项目文档，构造 WorkspaceContext 实例
+        cwd = Path(cwd).resolve() # 转成绝对路径
 
-        def git(args, fallback=""):
+        def git(args, fallback=""): # 安全执行git命令的包装器
             try:
                 result = subprocess.run(
                     ["git", *args],
@@ -69,15 +69,15 @@ class WorkspaceContext:
             except Exception:
                 return fallback
 
-        repo_root = (
+        repo_root = ( # 返回当前 Git 仓库的根目录路径
             Path(repo_root_override).resolve()
             if repo_root_override is not None
             else Path(git(["rev-parse", "--show-toplevel"], str(cwd))).resolve()
         )
-        docs = {}
+        docs = {} # 收集项目文档
         # 同时扫描 repo_root 和 cwd，这样在子目录启动时也能看到本地文档；
         # 但用相对路径做 key，避免同一份文档被重复收集。
-        for base in (repo_root, cwd):
+        for base in (repo_root, cwd): # 遍历两个目录：项目根目录 和 当前工作目录
             for name in DOC_NAMES:
                 path = base / name
                 if not path.exists():
@@ -99,7 +99,7 @@ class WorkspaceContext:
             project_docs=docs,
         )
 
-    def text(self):
+    def text(self): # 把上下文对象格式化成一段稳定的可读文本（给 prompt 前缀用）
         # 这段文本会被塞进 prompt prefix，作为相对稳定的基线上下文。
         commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
         docs = "\n".join(f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()) or "- none"
@@ -119,7 +119,7 @@ class WorkspaceContext:
             """
         ).strip()
 
-    def fingerprint(self):
+    def fingerprint(self): # 对上下文关键字段做哈希，判断“上下文是否变化”
         # 这个指纹用来判断仓库状态是否发生了足够大的变化，
         # 从而决定是否需要重建缓存中的 prompt prefix。
         payload = {
