@@ -385,7 +385,7 @@ def normalize_memory_state(state, workspace_root=None):
     episodic_notes = episodic_notes[-EPISODIC_NOTE_LIMIT:]
     state["episodic_notes"] = episodic_notes
 
-    v = state.get("file_summaries")
+    file_summaries = state.get("file_summaries")
     if not isinstance(file_summaries, dict):
         file_summaries = {}
     normalized_file_summaries = {}
