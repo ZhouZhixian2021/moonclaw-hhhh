@@ -11,7 +11,7 @@ from functools import partial
 
 from .workspace import IGNORED_PATH_NAMES, clip
 
-BASE_TOOL_SPECS = {
+BASE_TOOL_SPECS = { #基础的工具,无条件就可以使用
     "list_files": {
         "schema": {"path": "str='.'"},
         "risky": False,
@@ -42,9 +42,14 @@ BASE_TOOL_SPECS = {
         "risky": True,
         "description": "Replace one exact text block in a file.",
     },
+    "get_config": {
+        "schema": {"key": "str=''"},
+        "risky": False,
+        "description": "Show the agent's current runtime configuration (model, provider, limits, flags, etc.). Pass a key name to filter, or leave empty to show all.",
+    },
 }
 
-DELEGATE_TOOL_SPEC = {
+DELEGATE_TOOL_SPEC = { 
     "schema": {"task": "str", "max_steps": "int=3"},
     "risky": False,
     "description": "Ask a bounded read-only child agent to investigate.",
@@ -58,6 +63,7 @@ TOOL_EXAMPLES = {
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
     "patch_file": '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
     "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
+    "get_config": '<tool>{"name":"get_config","args":{}}</tool>',
 }
 
 
@@ -139,6 +145,10 @@ def validate_tool(agent, name, args):
             raise ValueError(f"old_text must occur exactly once, found {count}")
         return
 
+    if name == "get_config":
+        # 任何 key 都合法，空 key 表示全量输出；没有校验逻辑。
+        return
+
     if name == "delegate":
         task = str(args.get("task", "")).strip()
         if not task:
@@ -186,6 +196,8 @@ def tool_search(agent, args):
             ["rg", "-n", "--smart-case", "--max-count", "200", pattern, str(path)],
             cwd=agent.root,
             capture_output=True,
+            encoding="utf-8",
+            errors="replace",
             text=True,
         )
         return result.stdout.strip() or result.stderr.strip() or "(no matches)"
@@ -288,6 +300,39 @@ def tool_delegate(agent, args):
     return "delegate_result:\n" + child.ask(task)
 
 
+def tool_get_config(agent, args):
+    key = str(args.get("key", "")).strip()
+
+    cfg = {
+        "model": str(getattr(agent.model_client, "model", "")),
+        "provider": agent.model_client.__class__.__name__,
+        "platform": __import__("sys").platform,
+        "cwd": str(agent.root),
+        "branch": agent.workspace.branch,
+        "default_branch": agent.workspace.default_branch,
+        "approval_policy": agent.approval_policy,
+        "read_only": bool(agent.read_only),
+        "max_steps": int(agent.max_steps),
+        "max_new_tokens": int(agent.max_new_tokens),
+        "max_depth": int(agent.max_depth),
+        "depth": int(agent.depth),
+        "tools": sorted(agent.tools),
+        "feature_flags": dict(agent.feature_flags),
+        "workspace_fingerprint": agent.workspace.fingerprint(),
+        "session_id": agent.session.get("id", ""),
+    }
+
+    if key:
+        sub = {}
+        if key in cfg:
+            sub[key] = cfg[key]
+        else:
+            sub["error"] = f"unknown config key: {key}"
+        return json.dumps(sub, ensure_ascii=False, indent=2)
+
+    return json.dumps(cfg, ensure_ascii=False, indent=2)
+
+
 _TOOL_RUNNERS = {
     "list_files": tool_list_files,
     "read_file": tool_read_file,
@@ -295,4 +340,5 @@ _TOOL_RUNNERS = {
     "run_shell": tool_run_shell,
     "write_file": tool_write_file,
     "patch_file": tool_patch_file,
+    "get_config": tool_get_config,
 }

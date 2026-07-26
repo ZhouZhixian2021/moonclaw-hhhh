@@ -61,6 +61,8 @@ class WorkspaceContext:
                     ["git", *args],
                     cwd=cwd,
                     capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
                     text=True,
                     check=True,
                     timeout=5,

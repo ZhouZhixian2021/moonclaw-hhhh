@@ -7,6 +7,7 @@ MoonClaw 就是包在模型外面的控制循环：负责组 prompt、解析模�
 import json
 import os
 import re
+import sys
 import textwrap
 import uuid
 import hashlib
@@ -175,7 +176,7 @@ class MoonClaw:
         resume_state = self.session.setdefault("resume_state", {})
         if not isinstance(resume_state, dict):
             self.session["resume_state"] = {}
-    # 生成“当前运行身份签名”（模型/策略/参数/工具签名/工作区指纹）。
+    # 生成"当前运行身份签名"（模型/策略/参数/工具签名/工作区指纹）。
     def current_runtime_identity(self):
         return {
             "session_id": self.session.get("id", ""),
@@ -342,11 +343,15 @@ class MoonClaw:
                 "<final>Done.</final>",
             ]
         )
-        # prefix 可以理解成 agent 的“工作手册”：
+        # prefix 可以理解成 agent 的"工作手册"：
         # 它是谁、工具怎么调用、当前仓库是什么状态，都写在这里。
+        model_name = str(getattr(self.model_client, "model", "unknown"))
+        model_provider = self.model_client.__class__.__name__
         text = textwrap.dedent(
             f"""\
             You are moonClaw, a small local coding agent working inside a local repository.
+            You are powered by {model_name} ({model_provider}).
+            Platform: {sys.platform}
 
             Rules:
             - Use tools instead of guessing about the workspace.
@@ -360,6 +365,7 @@ class MoonClaw:
             - Never invent tool results.
             - Keep answers concise and concrete.
             - If the user asks you to create or update a specific file and the path is clear, use write_file or patch_file instead of repeatedly listing files.
+            - You may respond in Chinese, English, or a mix — match the user's language when it's clear.
             - Before writing tests for existing code, read the implementation first.
             - When writing tests, match the current implementation unless the user explicitly asked you to change the code.
             - New files should be complete and runnable, including obvious imports.
@@ -534,7 +540,7 @@ class MoonClaw:
         refresh = self.refresh_prefix() # 刷新 prefix
         self.resume_state = self.evaluate_resume_state() # 评估恢复状态
         prompt, metadata = self.context_manager.build(user_message) # 构建 prompt 和 metadata
-        # 这里把“这轮 prompt 是怎么拼出来的”连同缓存相关状态一起记下来，
+        # 这里把"这轮 prompt 是怎么拼出来的"连同缓存相关状态一起记下来，
         # 后面 trace/report 才能解释清楚：为什么这一轮 prefix 变了、缓存有没有命中。
         metadata.update(
             {
@@ -566,7 +572,7 @@ class MoonClaw:
         payload = self.redact_artifact(payload or {})
         payload["event"] = event
         payload["created_at"] = now()
-        # trace 是运行中的逐事件时间线，适合回答“这一轮 agent 到底做了什么”。
+        # trace 是运行中的逐事件时间线，适合回答"这一轮 agent 到底做了什么"。
         self.run_store.append_trace(task_state, payload)
         return payload
 
@@ -650,7 +656,7 @@ class MoonClaw:
 
         为什么存在：
         并不是每个工具结果都值得长期带进下一轮 prompt。完整结果已经进了
-        `history`，这里只挑少量“下一轮大概率还会用到”的事实做提纯，
+        `history`，这里只挑少量"下一轮大概率还会用到"的事实做提纯，
         例如最近读写过哪些文件、某个文件读出来的短摘要。
 
         输入 / 输出：
@@ -763,7 +769,7 @@ class MoonClaw:
         """执行一次完整的 agent 回合，直到产出最终答案或命中停止条件。
 
         为什么存在：
-        `ask()` 是整个 runtime 的总调度器。它把“用户提一个请求”扩展成一条
+        `ask()` 是整个 runtime 的总调度器。它把"用户提一个请求"扩展成一条
         可持续推进的控制循环：记录会话、组 prompt、调用模型、执行工具、
         写 trace/report、更新状态，直到模型给出最终答案或系统主动停下。
 
@@ -776,7 +782,7 @@ class MoonClaw:
         它是 CLI 和底层工具/模型之间的核心桥梁。CLI 收到用户输入后基本只做
         一件事：调用 `agent.ask()`。而 `ask()` 内部再去驱动 `ContextManager`
         组 prompt、`model_client.complete()` 调模型、`run_tool()` 执行动作。
-        如果新人想理解 moonClaw 是怎么“从一句话跑成一个 agent 流程”的，
+        如果新人想理解 moonClaw 是怎么"从一句话跑成一个 agent 流程"的，
         这里就是最关键的入口。
         """
         run_started_at = time.monotonic() # 记录运行起始时间
@@ -800,7 +806,7 @@ class MoonClaw:
         attempts = 0 # 统计模型被调了多少轮，attemps很高，但tool_steps很低，说明模型输出格式不好或者一直在retry
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
 
-        # 这是 agent 的主循环，可以按“感知 -> 决策 -> 行动 -> 记录”来理解：
+        # 这是 agent 的主循环，可以按"感知 -> 决策 -> 行动 -> 记录"来理解：
         # 1. 感知：重新组 prompt，把当前状态整理给模型看
         # 2. 决策：让模型返回一个工具调用，或一个最终答案
         # 3. 行动：如果是工具调用，就执行工具
@@ -869,7 +875,7 @@ class MoonClaw:
                     "prompt_cache_key": prompt_metadata.get("prompt_cache_key"),
                 },
             )
-            prompt_cache_key = None # 缓存键，用来告诉模型后端“这段稳定 prompt 可以复用”
+            prompt_cache_key = None # 缓存键，用来告诉模型后端"这段稳定 prompt 可以复用"
             prompt_cache_retention = None # 缓存保留策略，这里后面会设成 "in_memory"
             if getattr(self.model_client, "supports_prompt_cache", False): #取出这个属性，没有就默认为False
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
@@ -972,10 +978,10 @@ class MoonClaw:
             self.run_store.write_report(task_state, self.redact_artifact(self.build_report(task_state)))
             return final
 
-        if attempts >= max_attempts and tool_steps < self.max_steps: # “模型响应多次无效”停止
+        if attempts >= max_attempts and tool_steps < self.max_steps: # "模型响应多次无效"停止
             final = "Stopped after too many malformed model responses without a valid tool call or final answer."
             task_state.stop_retry_limit(final)
-        else: #“达到工具步数上限”停止
+        else: #"达到工具步数上限"停止
             final = "Stopped after reaching the step limit without a final answer."
             task_state.stop_step_limit(final)
         self.record({"role": "assistant", "content": final, "created_at": now()})
@@ -1007,8 +1013,8 @@ class MoonClaw:
         """执行一次工具调用，并在执行前后套上完整护栏。
 
         为什么存在：
-        在 agent 系统里，真正危险的不是“模型会不会想调用工具”，而是
-        “平台有没有在执行前把边界守住”。这个函数就是工具层的总闸口：
+        在 agent 系统里，真正危险的不是"模型会不会想调用工具"，而是
+        "平台有没有在执行前把边界守住"。这个函数就是工具层的总闸口：
         所有工具调用都必须先经过它，不能让模型直接碰到底层函数。
 
         输入 / 输出：
@@ -1017,12 +1023,12 @@ class MoonClaw:
           这样模型下一轮都能继续消费这份反馈。
 
         在 agent 链路里的位置：
-        它位于 `ask()` 的“模型决定要调用工具”之后，是控制循环里真正把模型
+        它位于 `ask()` 的"模型决定要调用工具"之后，是控制循环里真正把模型
         意图落到外部世界的一步。因此这里串起了几乎所有安全与可控设计：
         工具是否存在、参数是否合法、是否重复、是否需要审批、执行结果是否裁剪、
         是否需要回写记忆。
         """
-        # 工具执行不是“直接调函数”，而是一条带护栏的流水线：
+        # 工具执行不是"直接调函数"，而是一条带护栏的流水线：
         # 工具是否存在 -> 参数是否合法 -> 是否重复调用 -> 是否通过审批
         # -> 真正执行 -> 更新记忆。
         tool = self.tools.get(name)
@@ -1220,7 +1226,7 @@ class MoonClaw:
 
         为什么存在：
         模型输出首先是自然语言文本，而 runtime 需要的是结构化决策：
-        “这是工具调用”还是“这是最终答案”。如果没有这层解析，后面的工具校验、
+        "这是工具调用"还是"这是最终答案"。如果没有这层解析，后面的工具校验、
         审批和执行链路就没法可靠工作。
 
         输入 / 输出：

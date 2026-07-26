@@ -109,6 +109,8 @@ def _git_value(args, fallback="", cwd=None):
             ["git", *args],
             cwd=cwd or Path.cwd(),
             capture_output=True,
+            encoding="utf-8",
+            errors="replace",
             text=True,
             check=True,
             timeout=5,
@@ -489,6 +491,8 @@ class BenchmarkEvaluator:
             cwd=fixture_copy_root,
             shell=True,
             capture_output=True,
+            encoding="utf-8",
+            errors="replace",
             text=True,
         )
 
